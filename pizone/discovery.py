@@ -14,9 +14,8 @@ from asyncio import (
 from logging import Logger
 from typing import Dict, List, Optional, Set
 
-import netifaces # type: ignore
+import netifaces  # type: ignore
 from aiohttp import ClientSession
-from async_timeout import timeout
 
 from .controller import Controller
 from .zone import Zone
@@ -287,7 +286,7 @@ class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
             self._send_broadcasts()
 
             try:
-                async with timeout(
+                async with asyncio.timeout(
                     DISCOVERY_RESCAN if self._disconnected else DISCOVERY_SLEEP
                 ):
                     async with self._scan_condition:
@@ -408,8 +407,7 @@ class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
                     await controller._initialize()  # noqa: E501
                 except ConnectionError as ex:
                     _LOG.warning(
-                        "Can't connect to discovered server at IP '%s'"
-                        " exception: %s",
+                        "Can't connect to discovered server at IP '%s' exception: %s",
                         device_ip,
                         repr(ex),
                     )

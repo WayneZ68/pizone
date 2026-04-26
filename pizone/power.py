@@ -11,7 +11,6 @@ import logging
 from enum import IntEnum, unique
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-
 _LOG = logging.getLogger("pizone.power")
 
 

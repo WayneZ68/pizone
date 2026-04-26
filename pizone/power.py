@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 from enum import IntEnum, unique
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Set, Tuple
 
 _LOG = logging.getLogger("pizone.power")
 
@@ -34,7 +34,7 @@ class BatteryLevel(IntEnum):
 class PowerChannel:
     """Channel within power device"""
 
-    def __init__(self, device: PowerDevice, index: int):
+    def __init__(self, device: PowerDevice, index: int) -> None:
         self._device = device
         self._index = index
 
@@ -69,7 +69,7 @@ class PowerChannel:
         return self._config["Name"]
 
     @property
-    def group_number(self) -> Optional[int]:
+    def group_number(self) -> int | None:
         """Group number"""
         num = self._config["GrNo"]
         return num if num < 255 else None
@@ -93,7 +93,7 @@ class PowerChannel:
 class PowerDevice:
     """Device for power information."""
 
-    def __init__(self, power: Power, index: int):
+    def __init__(self, power: Power, index: int) -> None:
         self._power = power
         self._index = index
         self._channels = tuple(PowerChannel(self, i) for i in range(0, 3))
@@ -137,7 +137,7 @@ class PowerDevice:
 class PowerGroup:
     """Grouped power devices"""
 
-    def __init__(self, power: Power, channels: Iterable[PowerChannel]):
+    def __init__(self, power: Power, channels: Iterable[PowerChannel]) -> None:
         self._power = power
         self._channels = tuple(channels)
         # get unique devices
@@ -170,13 +170,13 @@ class PowerGroup:
 class Power:
     """Contains power information."""
 
-    def __init__(self, controller) -> None:
+    def __init__(self, controller: Any) -> None:
         """Init function."""
-        self._controller = controller  # type: ignore
-        self._config = {}  # type: Dict[str, Any]
-        self._status = {"LastReadingNo": -1}  # type: Dict[str, Any]
+        self._controller = controller
+        self._config: Dict[str, Any] = {}
+        self._status: Dict[str, Any] = {"LastReadingNo": -1}
         self._devices = tuple(PowerDevice(self, i) for i in range(0, 5))
-        self._groups = None  # type: Optional[Tuple[PowerGroup, ...]]
+        self._groups: Tuple[PowerGroup, ...] | None = None
 
     async def init(self) -> None:
         """Initialise the power settings."""
@@ -190,7 +190,7 @@ class Power:
 
     async def refresh(self) -> bool:
         """Refreshes the power usage data."""
-        status = await self._do_request(2, "PowerMonitorStatus")  # type: Dict[str, Any]
+        status: Dict[str, Any] = await self._do_request(2, "PowerMonitorStatus")
 
         if status["LastReadingNo"] == self._status["LastReadingNo"]:
             return False
@@ -242,6 +242,6 @@ class Power:
         return self._devices
 
     @property
-    def groups(self) -> Optional[Tuple[PowerGroup, ...]]:
+    def groups(self) -> Tuple[PowerGroup, ...] | None:
         """Available power groups."""
         return self._groups

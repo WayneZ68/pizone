@@ -5,7 +5,7 @@ Various properties allow interogation and setting of zone data.
 """
 
 from enum import Enum
-from typing import Dict, Optional, Union
+from typing import Any, Dict, Union
 
 
 class Zone:
@@ -37,8 +37,8 @@ class Zone:
     DictValue = Union[str, int, float]
     ZoneData = Dict[str, DictValue]
 
-    def __init__(self, controller, index: int) -> None:
-        self._zone_data = {}  # type: Dict
+    def __init__(self, controller: Any, index: int) -> None:
+        self._zone_data: Zone.ZoneData = {}
         self._index = index
         self._controller = controller
 
@@ -53,7 +53,7 @@ class Zone:
         return self._get_zone_state("Name")
 
     @property
-    def type(self) -> "Type":
+    def type(self) -> "Zone.Type":
         """This indicates the type of the zone. Possible values are:
         'auto' – the zone has temperature control enabled
         'opcl' – the zone is open/close only
@@ -62,7 +62,7 @@ class Zone:
         return self.Type(self._get_zone_state("Type"))
 
     @property
-    def mode(self) -> "Mode":
+    def mode(self) -> "Zone.Mode":
         """This indicates the current mode the zone is in. Possible values are:
         'open' – the zone is currently open
         'close' – the zone is currently closed
@@ -71,12 +71,12 @@ class Zone:
         return self.Mode(self._get_zone_state("Mode"))
 
     @property
-    def temp_setpoint(self) -> Optional[float]:
+    def temp_setpoint(self) -> float | None:
         """Temp setpoint in degrees C."""
         return self._get_zone_state("SetPoint") or None
 
     @property
-    def temp_current(self) -> Optional[float]:
+    def temp_current(self) -> float | None:
         """Current zone temperature"""
         return self._get_zone_state("Temp") or None
 
@@ -142,7 +142,7 @@ class Zone:
         self._zone_data["SetPoint"] = value
         self._fire_listeners()
 
-    async def set_mode(self, value: Mode) -> None:
+    async def set_mode(self, value: "Zone.Mode") -> None:
         """Set the current zone mode.
         Possible values are:
         'open' – the zone is currently open
@@ -159,7 +159,7 @@ class Zone:
             self._zone_data["Mode"] = value.value
         self._fire_listeners()
 
-    def _update_zone(self, zone_data, notify: bool = True):
+    def _update_zone(self, zone_data: "Zone.ZoneData", notify: bool = True) -> None:
         if zone_data["Index"] != self._index:
             raise AttributeError("Can't change index of existing zone.")
         self._zone_data = zone_data
@@ -170,11 +170,11 @@ class Zone:
         # pylint: disable=protected-access
         self._controller._discovery.zone_update(self._controller, self)
 
-    def _get_zone_state(self, state):
+    def _get_zone_state(self, state: str) -> Any:
         self._controller._ensure_connected()  # pylint: disable=protected-access  # noqa
         return self._zone_data[state]
 
-    async def _send_command(self, command, data: Union[str, float, int]):
+    async def _send_command(self, command: str, data: Union[str, float, int]) -> None:
         send_data = {command: {"ZoneNo": str(self._index + 1), "Command": str(data)}}
         # pylint: disable=protected-access
         await self._controller._send_command_async(command, send_data)

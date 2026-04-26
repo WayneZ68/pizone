@@ -8,11 +8,9 @@ from asyncio import (
     Condition,
     DatagramProtocol,
     DatagramTransport,
-    Future,
     Task,
 )
-from logging import Logger
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict
 
 import netifaces  # type: ignore
 from aiohttp import ClientSession
@@ -32,7 +30,7 @@ DISCOVERY_TIMEOUT = 2.0
 DISCOVERY_SLEEP = 5.0 * 60.0
 DISCOVERY_RESCAN = 20.0
 
-_LOG = logging.getLogger("pizone.discovery")  # type: Logger
+_LOG = logging.getLogger("pizone.discovery")
 
 
 class LogExceptions:
@@ -41,10 +39,10 @@ class LogExceptions:
     def __init__(self, func: str) -> None:
         self.func = func
 
-    def __enter__(self):
+    def __enter__(self) -> "LogExceptions":
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> bool:
         if exc_type:
             _LOG.error(
                 "Exception ignored when calling listener %s", self.func, exc_info=True
@@ -125,48 +123,52 @@ class DiscoveryService(ABC):
         """Stop discovery and close all connections"""
 
     @property
+    @abstractmethod
     def is_closed(self) -> bool:
-        """Return true if closed"""
+        """Return true if closed."""
+        raise NotImplementedError
 
     @property
+    @abstractmethod
     def controllers(self) -> Dict[str, Controller]:
-        """Dictionary of all the currently discovered controllers"""
+        """Dictionary of all the currently discovered controllers."""
+        raise NotImplementedError
 
 
 class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
     """Discovery protocol class. Not for external use."""
 
-    def __init__(self, session: ClientSession = None) -> None:
+    def __init__(self, session: ClientSession | None = None) -> None:
         """Start the discovery protocol using the supplied loop.
 
         raises:
             RuntimeError: If attempted to start the protocol when it is
                           already running.
         """
-        self._controllers = {}  # type: Dict[str, Controller]
-        self._disconnected = set()  # type: Set[str]
-        self._listeners = []  # type: List[Listener]
-        self._close_task = None  # type: Optional[Task]
+        self._controllers: Dict[str, Controller] = {}
+        self._disconnected: set[str] = set()
+        self._listeners: list[Listener] = []
+        self._close_task: Task | None = None
 
         _LOG.info("Starting discovery protocol")
         self.session = session
         self._own_session = session is None
 
-        self._transport = None  # type: Optional[DatagramTransport]
+        self._transport: DatagramTransport | None = None
 
-        self._scan_condition = Condition()  # type: Condition
+        self._scan_condition = Condition()
 
-        self._tasks = []  # type: List[Future]
+        self._tasks: list[Task] = []
 
     # Async context manager interface
     async def __aenter__(self) -> DiscoveryService:
         await self.start_discovery()
         return self
 
-    async def __aexit__(self, exc_type, exc_value, traceback):
+    async def __aexit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
         await self.close()
 
-    def _task_done_callback(self, task):
+    def _task_done_callback(self, task: Task) -> None:
         try:
             if task.exception():
                 _LOG.exception("Uncaught exception", exc_info=task.exception())
@@ -175,9 +177,9 @@ class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
         self._tasks.remove(task)
 
     # managing the task list.
-    def create_task(self, coro) -> Task:
+    def create_task(self, coro: Any) -> Task:
         """Create a task in the event loop. Keeps track of created tasks."""
-        task = asyncio.get_running_loop().create_task(coro)  # type: Task
+        task: Task = asyncio.get_running_loop().create_task(coro)
         self._tasks.append(task)
 
         task.add_done_callback(self._task_done_callback)
@@ -190,7 +192,7 @@ class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
         All existing controllers will be passed to the listener."""
         self._listeners.append(listener)
 
-        def callback():
+        def callback() -> None:
             for controller in self._controllers.values():
                 listener.controller_discovered(controller)
 
@@ -264,7 +266,7 @@ class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
         self._transport = transport
         self.create_task(self._scan_loop())
 
-    def _get_broadcasts(self):
+    def _get_broadcasts(self) -> Any:
         for ifaddr in map(netifaces.ifaddresses, netifaces.interfaces()):
             inetaddrs = ifaddr.get(netifaces.AF_INET)
             if not inetaddrs:
@@ -274,7 +276,8 @@ class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
                 if broadcast:
                     yield broadcast
 
-    def _send_broadcasts(self):
+    def _send_broadcasts(self) -> None:
+        assert self._transport is not None, "Discovery transport is not ready"
         for broadcast in self._get_broadcasts():
             _LOG.debug("Sending discovery message to addr %s", broadcast)
             self._transport.sendto(DISCOVERY_MSG, (broadcast, DISCOVERY_PORT))
@@ -326,7 +329,7 @@ class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
 
         await asyncio.wait(self._tasks)
 
-    def connection_lost(self, exc):
+    def connection_lost(self, exc: Exception | None) -> None:
         _LOG.debug("Connection Lost")
         if not self._close_task:
             _LOG.error("Connection Lost unexpectedly: %s", repr(exc))
@@ -338,16 +341,16 @@ class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
             return self._transport.is_closing()
         return self._close_task is not None
 
-    def error_received(self, exc):
+    def error_received(self, exc: Exception) -> None:
         _LOG.warning("Error passed and ignored to error_recieved", exc_info=True)
 
-    def _find_by_addr(self, addr: str) -> Optional[Controller]:
+    def _find_by_addr(self, addr: tuple[str, int]) -> Controller | None:
         for _, ctrl in self._controllers.items():
             if ctrl.device_ip == addr[0]:
                 return ctrl
         return None
 
-    async def _wrap_update(self, coro):
+    async def _wrap_update(self, coro: Any) -> None:
         try:
             await coro
         except ConnectionError:
@@ -355,13 +358,13 @@ class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
                 "Unable to complete %s due to connection error", coro, exc_info=True
             )
 
-    def datagram_received(self, data, addr):
+    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         _LOG.debug("Datagram Recieved %s", data)
         if self._close_task:
             return
         self._process_datagram(data, addr)
 
-    def _process_datagram(self, data, addr):
+    def _process_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
         if data in (DISCOVERY_MSG, CHANGED_SCHEDULES):
             # ignore
             pass
@@ -378,7 +381,7 @@ class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
         else:
             self._discovery_recieved(data)
 
-    def _discovery_recieved(self, data):
+    def _discovery_recieved(self, data: bytes) -> None:
         message = data.decode().split(",")
         if (
             len(message) < 3
@@ -402,7 +405,7 @@ class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
                 device_uid, device_ip, is_v2, is_ipower
             )
 
-            async def initialize_controller():
+            async def initialize_controller() -> None:
                 try:
                     await controller._initialize()  # noqa: E501
                 except ConnectionError as ex:
@@ -421,7 +424,9 @@ class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
             controller = self._controllers[device_uid]
             controller._refresh_address(device_ip)
 
-    def _create_controller(self, device_uid, device_ip, is_v2, is_ipower):
+    def _create_controller(
+        self, device_uid: str, device_ip: str, is_v2: bool, is_ipower: bool
+    ) -> Controller:
         return Controller(
             self,
             device_uid=device_uid,
@@ -431,7 +436,9 @@ class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
         )
 
 
-def discovery(*listeners: Listener, session: ClientSession = None) -> DiscoveryService:
+def discovery(
+    *listeners: Listener, session: ClientSession | None = None
+) -> DiscoveryService:
     """Create discovery service. Returned object is a asynchronous
     context manager so can be used with 'async with' statement.
     Alternately call start_discovery or start_discovery_async to commence

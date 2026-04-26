@@ -6,7 +6,7 @@ import logging
 from asyncio import Condition, Lock
 from enum import Enum
 from json.decoder import JSONDecodeError
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Union, cast
 
 import aiohttp
 
@@ -57,10 +57,15 @@ class Controller:
         "3-speed": [Fan.LOW, Fan.MED, Fan.HIGH, Fan.AUTO],
         "2-speed": [Fan.LOW, Fan.HIGH, Fan.AUTO],
         "var-speed": [Fan.LOW, Fan.MED, Fan.HIGH, Fan.AUTO],
-    }  # type: Dict[str, List[Fan]]
+    }
 
     def __init__(
-        self, discovery, device_uid: str, device_ip: str, is_v2: bool, is_ipower: bool
+        self,
+        discovery: Any,
+        device_uid: str,
+        device_ip: str,
+        is_v2: bool,
+        is_ipower: bool,
     ) -> None:
         """Create a controller interface.
 
@@ -87,13 +92,13 @@ class Controller:
         self._is_v2 = is_v2
         self._is_ipower = is_ipower
 
-        self.zones = []  # type: List[Zone]
-        self.fan_modes = []  # type: List[Controller.Fan]
-        self._system_settings = {}  # type: Controller.ControllerData
-        self._power = None  # type: Optional[Power]
+        self.zones: list[Zone] = []
+        self.fan_modes: list[Controller.Fan] = []
+        self._system_settings: Controller.ControllerData = {}
+        self._power: Power | None = None
 
-        self._initialised = False
-        self._fail_exception = None
+        self._initialised: bool = False
+        self._fail_exception: Exception | None = None
 
         self._sending_lock = Lock()
         self._scan_condition = Condition()
@@ -156,7 +161,7 @@ class Controller:
         return self._fail_exception is None
 
     @property
-    def power(self) -> Optional[Power]:
+    def power(self) -> Power | None:
         """Power info"""
         return self._power
 
@@ -176,7 +181,7 @@ class Controller:
         return self._is_v2
 
     @property
-    def discovery(self):
+    def discovery(self) -> Any:
         """The discovery service"""
         return self._discovery
 
@@ -196,7 +201,7 @@ class Controller:
             return self.Mode.FREE_AIR
         return self.Mode(self._get_system_state("SysMode"))
 
-    async def set_mode(self, value: Mode):
+    async def set_mode(self, value: Mode) -> None:
         """Set system mode, cooling, heating, etc."""
         if value == Controller.Mode.FREE_AIR:
             if self.free_air:
@@ -233,7 +238,7 @@ class Controller:
         """Current setting for the sleep timer."""
         return int(self._get_system_state("SleepTimer"))
 
-    async def set_sleep_timer(self, value: int):
+    async def set_sleep_timer(self, value: int) -> None:
         """The sleep timer.
         Valid settings are 0, 30, 60, 90, 120
         Raises:
@@ -267,19 +272,19 @@ class Controller:
         await self._set_system_state("FreeAir", "FreeAir", "on" if value else "off")
 
     @property
-    def temp_supply(self) -> Optional[float]:
+    def temp_supply(self) -> float | None:
         """Current supply, or in duct, air temperature."""
         return float(self._get_system_state("Supply")) or None
 
     @property
-    def temp_setpoint(self) -> Optional[float]:
+    def temp_setpoint(self) -> float | None:
         """AC unit setpoint temperature.
         This is the unit target temp with with rasMode == RAS,
         or with rasMode == master and ctrlZone == 13.
         """
         return float(self._get_system_state("Setpoint")) or None
 
-    async def set_temp_setpoint(self, value: float):
+    async def set_temp_setpoint(self, value: float) -> None:
         """AC unit setpoint temperature.
         This is the unit target temp with with rasMode == RAS,
         or with rasMode == master and ctrlZone == 13.
@@ -297,7 +302,7 @@ class Controller:
         await self._set_system_state("Setpoint", "UnitSetpoint", value, str(value))
 
     @property
-    def temp_return(self) -> Optional[float]:
+    def temp_return(self) -> float | None:
         """The return, or room, air temperature"""
         return float(self._get_system_state("Temp")) or None
 
@@ -367,9 +372,7 @@ class Controller:
 
     async def _refresh_system(self, notify: bool = True) -> None:
         """Refresh the system settings."""
-        values = await self._get_resource(
-            "SystemSettings"
-        )  # type: Controller.ControllerData  # noqa
+        values: Controller.ControllerData = await self._get_resource("SystemSettings")
         if self._device_uid != values["AirStreamDeviceUId"]:
             _LOG.error("_refresh_system called with unmatching device ID")
             return
@@ -395,7 +398,7 @@ class Controller:
             *[self._refresh_zone_group(i, notify) for i in range(0, zones, 4)]
         )
 
-    async def _refresh_zone_group(self, group: int, notify: bool = True):
+    async def _refresh_zone_group(self, group: int, notify: bool = True) -> None:
         assert group in [0, 4, 8]
         zone_data_part = await self._get_resource(f"Zones{group + 1}_{group + 4}")
 
@@ -404,18 +407,24 @@ class Controller:
             # pylint: disable=protected-access
             self.zones[i + group]._update_zone(zone_data, notify)
 
-    def _refresh_address(self, address):
+    def _refresh_address(self, address: str) -> None:
         """Called from discovery to update the address"""
         self._ip = address
         # Signal to the retry connection loop to have another go.
         if self._fail_exception:
             self._discovery.create_task(self._retry_connection())
 
-    def _get_system_state(self, state):
+    def _get_system_state(self, state: str) -> Any:
         self._ensure_connected()
         return self._system_settings.get(state)
 
-    async def _set_system_state(self, state, command, value, send=None):
+    async def _set_system_state(
+        self,
+        state: str,
+        command: str,
+        value: DictValue,
+        send: Any | None = None,
+    ) -> None:
         if send is None:
             send = value
         await self._send_command_async(command, {command: send})
@@ -431,7 +440,7 @@ class Controller:
                 "Unable to connect to the controller"
             ) from self._fail_exception
 
-    def _failed_connection(self, ex):
+    def _failed_connection(self, ex: Exception) -> None:
         if self._fail_exception:
             self._fail_exception = ex
             return
@@ -465,7 +474,7 @@ class Controller:
                 exc_info=True,
             )
 
-    async def _get_resource(self, resource: str):
+    async def _get_resource(self, resource: str) -> Any:
         try:
             session = self._discovery.session
             async with (
@@ -489,7 +498,7 @@ class Controller:
             self._failed_connection(ex)
             raise ConnectionError("Unable to connect to the controller") from ex
 
-    async def _send_command_async(self, command: str, data: Any):
+    async def _send_command_async(self, command: str, data: Any) -> str:
         # For some reason aiohttp fragments post requests, which causes
         # the server to fail disgracefully. Implimented rough and dirty
         # HTTP POST client.
@@ -501,7 +510,7 @@ class Controller:
             def __init__(self) -> None:
                 self.response = bytearray()
 
-            def connection_made(self, transport):
+            def connection_made(self, transport: asyncio.BaseTransport) -> None:
                 body = json.dumps(data).encode("latin_1")
                 header = (
                     f"POST /{command} HTTP/1.1\r\n"
@@ -510,12 +519,12 @@ class Controller:
                     "\r\n"
                 ).encode()
                 _LOG.debug("Writing message to %s", device_ip)
-                transport.write(header + body)
+                cast(asyncio.WriteTransport, transport).write(header + body)
 
-            def data_received(self, data):
+            def data_received(self, data: bytes) -> None:
                 self.response += data
 
-            def eof_received(self):
+            def eof_received(self) -> None:
                 full = self.response.decode("latin_1")
                 if not full:
                     on_complete.set_exception(RuntimeError("Empty HTTP Response"))

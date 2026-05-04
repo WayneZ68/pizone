@@ -70,12 +70,12 @@ class Listener:
         """
 
     def controller_update(self, ctrl: Controller) -> None:
-        """Called when a system update message is recieved from the controller.
+        """Called when a system update message is received from the controller.
         Controller data will be set to new value.
         """
 
     def zone_update(self, ctrl: Controller, zone: Zone) -> None:
-        """Called when a zone update message is recieved from the controller
+        """Called when a zone update message is received from the controller
         Zone data will be set to new value.
         """
 
@@ -342,7 +342,7 @@ class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
         return self._close_task is not None
 
     def error_received(self, exc: Exception) -> None:
-        _LOG.warning("Error passed and ignored to error_recieved", exc_info=True)
+        _LOG.warning("Error passed and ignored to error_received", exc_info=True)
 
     def _find_by_addr(self, addr: tuple[str, int]) -> Controller | None:
         for _, ctrl in self._controllers.items():
@@ -359,7 +359,7 @@ class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
             )
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
-        _LOG.debug("Datagram Recieved %s", data)
+        _LOG.debug("Datagram Received %s", data)
         if self._close_task:
             return
         self._process_datagram(data, addr)
@@ -379,9 +379,9 @@ class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
                 # pylint: disable=protected-access
                 self.create_task(self._wrap_update(ctrl._refresh_zones()))
         else:
-            self._discovery_recieved(data)
+            self._discovery_received(data)
 
-    def _discovery_recieved(self, data: bytes) -> None:
+    def _discovery_received(self, data: bytes) -> None:
         message = data.decode().split(",")
         if (
             len(message) < 3

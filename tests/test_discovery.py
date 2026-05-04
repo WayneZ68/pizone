@@ -1,9 +1,10 @@
 from asyncio import sleep
 from unittest.mock import patch
 
+from pytest import raises
+
 from pizone import Controller, Listener, discovery
 from pizone.discovery import _DiscoveryServiceImpl
-from pytest import raises
 
 
 @patch.object(_DiscoveryServiceImpl, "_get_broadcasts")

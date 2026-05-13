@@ -1,11 +1,14 @@
+# pylint: disable=protected-access
+# pylint: disable=protected-access
 from asyncio import Event, wait_for
 from copy import deepcopy
-from typing import Any, Dict, List, Tuple
+from typing import Any
 from unittest.mock import AsyncMock
 
+import pytest
+
 from pizone import Controller, Listener
-from pizone.discovery import CHANGED_SYSTEM, CHANGED_ZONES, _DiscoveryServiceImpl
-from pytest import fixture
+from pizone.discovery import CHANGED_SYSTEM, CHANGED_ZONES, DiscoveryService
 
 
 class MockController(Controller):
@@ -15,8 +18,8 @@ class MockController(Controller):
         super().__init__(discovery, device_uid, device_ip, is_v2, is_ipower)
         from .resources import SYSTEMS
 
-        self.resources = deepcopy(SYSTEMS[device_uid])  # type: Dict[str,Any]
-        self.sent = []  # type: List[Tuple[str,Any]]
+        self.resources = deepcopy(SYSTEMS[device_uid])  # type: dict[str, Any]
+        self.sent: list[tuple[str, Any]] = []
         self._connected = True
 
     def _check_connected(self):
@@ -49,7 +52,7 @@ class MockController(Controller):
         await self.discovery._process_datagram(CHANGED_ZONES, ("8.8.8.8", 12107))
 
 
-class MockDiscoveryService(_DiscoveryServiceImpl):
+class MockDiscoveryService(DiscoveryService):
     def __init__(self) -> None:
         super().__init__()
         self._send_broadcasts = AsyncMock()  # type: ignore
@@ -95,31 +98,27 @@ async def _register_mock_service(svc, datagram: str):
     await listener.await_controller()
 
 
-@fixture
-def service(event_loop):
-    """Fixture to provide a test instance of HASS."""
+@pytest.fixture
+async def service():
+    """Async fixture providing a mock discovery service with a pre-discovered controller."""
     service = MockDiscoveryService()
 
-    event_loop.run_until_complete(
-        _register_mock_service(
-            service, b"ASPort_12107,Mac_000000001,IP_8.8.8.8,iZone,iLight,iDrate"
-        )
+    await _register_mock_service(
+        service, b"ASPort_12107,Mac_000000001,IP_8.8.8.8,iZone,iLight,iDrate"
     )
 
     yield service
 
-    event_loop.run_until_complete(service.close())
+    await service.close()
 
 
-@fixture
-def legacy_service(event_loop):
-    """Fixture to provide a test instance of HASS."""
+@pytest.fixture
+async def legacy_service():
+    """Async fixture providing a mock discovery service with legacy discovery message."""
     service = MockDiscoveryService()
 
-    event_loop.run_until_complete(
-        _register_mock_service(service, b"ASPort_12107,Mac_000000001,IP_8.8.8.8")
-    )
+    await _register_mock_service(service, b"ASPort_12107,Mac_000000001,IP_8.8.8.8")
 
     yield service
 
-    event_loop.run_until_complete(service.close())
+    await service.close()

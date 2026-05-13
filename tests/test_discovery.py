@@ -1,13 +1,16 @@
+# pylint: disable=protected-access
 from asyncio import sleep
 from unittest.mock import patch
 
+import pytest
 from pytest import raises
 
 from pizone import Controller, Listener, discovery
-from pizone.discovery import _DiscoveryServiceImpl
+from pizone.discovery import DiscoveryService
 
 
-@patch.object(_DiscoveryServiceImpl, "_get_broadcasts")
+@pytest.mark.asyncio
+@patch.object(DiscoveryService, "_get_broadcasts")
 async def test_broadcast(broadcasts):
     broadcasts.return_value = []
 
@@ -15,13 +18,15 @@ async def test_broadcast(broadcasts):
         assert broadcasts.called
 
 
-@patch.object(_DiscoveryServiceImpl, "_send_broadcasts")
+@pytest.mark.asyncio
+@patch.object(DiscoveryService, "_send_broadcasts")
 async def test_messages_sent(send_broadcasts):
     async with discovery():
         assert send_broadcasts.called
 
 
-@patch.object(_DiscoveryServiceImpl, "_send_broadcasts")
+@pytest.mark.asyncio
+@patch.object(DiscoveryService, "_send_broadcasts")
 async def test_rescan(send):
     async with discovery() as service:
         assert not service.is_closed
@@ -34,6 +39,7 @@ async def test_rescan(send):
     assert service.is_closed
 
 
+@pytest.mark.asyncio
 async def test_fail_on_connect(caplog):
     from .conftest import MockDiscoveryService
 
@@ -56,6 +62,7 @@ async def test_fail_on_connect(caplog):
     assert not service._controllers
 
 
+@pytest.mark.asyncio
 async def test_connection_lost(service, caplog):
     service.connection_lost(IOError("Nonspecific"))
     await sleep(0)
@@ -66,6 +73,7 @@ async def test_connection_lost(service, caplog):
     assert service.is_closed
 
 
+@pytest.mark.asyncio
 async def test_discovery(service):
     assert len(service._controllers) == 1
     assert "000000001" in service._controllers
@@ -76,10 +84,11 @@ async def test_discovery(service):
     assert controller.mode == Controller.Mode.HEAT
 
     await controller.set_mode(Controller.Mode.COOL)
-    assert controller.sent[0] == ("SystemMODE", "cool")
+    assert controller.sent[0] == ("SystemMODE", {"SystemMODE": "cool"})
     assert controller.mode == Controller.Mode.COOL
 
 
+@pytest.mark.asyncio
 async def test_legacy_discovery(legacy_service):
     service = legacy_service
 
@@ -92,12 +101,14 @@ async def test_legacy_discovery(legacy_service):
     assert controller.mode == Controller.Mode.HEAT
 
     await controller.set_mode(Controller.Mode.COOL)
-    assert controller.sent[0] == ("SystemMODE", "cool")
+    assert controller.sent[0] == ("SystemMODE", {"SystemMODE": "cool"})
     assert controller.mode == Controller.Mode.COOL
 
 
-async def test_ip_addr_change(service, caplog):
-    controller = service._controllers["000000001"]  # type: Controller
+@pytest.mark.asyncio
+async def test_ip_addr_change(service):
+    """Verify that IP address changes are handled."""
+    controller = service._controllers["000000001"]  # type: ignore[attr-defined]  # type: Controller
     assert controller.device_uid == "000000001"
     assert controller.device_ip == "8.8.8.8"
 
@@ -109,6 +120,7 @@ async def test_ip_addr_change(service, caplog):
     assert controller.device_ip == "8.8.8.4"
 
 
+@pytest.mark.asyncio
 async def test_reconnect(service, caplog):
     controller = service._controllers["000000001"]  # type: Controller
     assert controller.device_uid == "000000001"
@@ -130,9 +142,10 @@ async def test_reconnect(service, caplog):
     # Reconnect OK
     assert caplog.messages[1][:23] == "Controller reconnected:"
     await controller.set_mode(Controller.Mode.COOL)
-    assert controller.sent[0] == ("SystemMODE", "cool")
+    assert controller.sent[0] == ("SystemMODE", {"SystemMODE": "cool"})
 
 
+@pytest.mark.asyncio
 async def test_reconnect_listener(service):
     controller = service._controllers["000000001"]  # type: Controller
 
@@ -187,3 +200,76 @@ async def test_reconnect_listener(service):
         await controller.set_mode(Controller.Mode.COOL)
 
     assert len(calls) == 4
+
+
+@pytest.mark.asyncio
+async def test_rescan_cooldown_suppression(service):
+    """Verify that rescan is suppressed within the cool-down window."""
+    from unittest.mock import AsyncMock
+
+    original_rescan = service._rescan
+    service._rescan = AsyncMock(side_effect=original_rescan)
+
+    # First fetch_controllers with timeout should trigger rescan
+    await service.fetch_controllers(timeout=0.1)
+    assert service._rescan.call_count == 1
+
+    # Immediate second fetch within cool-down should not trigger new rescan
+    await service.fetch_controllers(timeout=0.1)
+    assert service._rescan.call_count == 1  # Still 1, not 2
+
+
+@pytest.mark.asyncio
+async def test_fetch_controller_already_known(service):
+    """Verify that fetch_controller returns immediately for known controller."""
+    controller = await service.fetch_controller("000000001", timeout=1.0)
+    assert controller is not None
+    assert controller.device_uid == "000000001"
+
+
+@pytest.mark.asyncio
+async def test_fetch_controller_unknown_no_timeout(service):
+    """Verify that fetch_controller returns None for unknown controller without timeout."""
+    controller = await service.fetch_controller("unknown_uid")
+    assert controller is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_controller_unknown_timeout_expires(service):
+    """Verify that fetch_controller returns None when timeout expires."""
+    controller = await service.fetch_controller("unknown_uid", timeout=0.1)
+    assert controller is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_controllers_no_timeout(service):
+    """Verify that fetch_controllers returns snapshot without timeout."""
+    controllers = await service.fetch_controllers()
+    assert len(controllers) == 1
+    assert "000000001" in controllers
+
+
+@pytest.mark.asyncio
+async def test_fetch_controllers_with_timeout(service):
+    """Verify that fetch_controllers waits when timeout is specified."""
+    controllers = await service.fetch_controllers(timeout=0.1)
+    assert len(controllers) == 1
+    assert "000000001" in controllers
+
+
+@pytest.mark.asyncio
+async def test_listener_controller_discovered_on_add(service):
+    """Verify that listener receives existing controllers on add."""
+    calls = []
+
+    class TestListener(Listener):
+        def controller_discovered(self, ctrl: Controller) -> None:
+            calls.append(("discovered", ctrl.device_uid))
+
+    listener = TestListener()
+    service.add_listener(listener)
+    await sleep(0)
+
+    # Should have been called with the existing controller
+    assert len(calls) == 1
+    assert calls[0] == ("discovered", "000000001")

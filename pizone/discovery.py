@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-from abc import ABC, abstractmethod
 from asyncio import (
     CancelledError,
     Condition,
@@ -11,7 +10,7 @@ from asyncio import (
     Task,
 )
 from contextlib import suppress
-from typing import Any, Dict
+from typing import Any
 
 import netifaces  # type: ignore
 from aiohttp import ClientSession
@@ -84,69 +83,7 @@ class Listener:
         """Called when the power monitor updates."""
 
 
-class DiscoveryService(ABC):
-    """Interface for discovery.
-
-    This service is both a context manager, and an asynchronous context
-    manager. When used in the context manager version, the start
-    discovery and close will be called automatically when opening
-    and closing the context respectively.
-    """
-
-    @abstractmethod
-    def add_listener(self, listener: Listener) -> None:
-        """Add a listener.
-
-        All existing controllers will be passed to the listener."""
-
-    @abstractmethod
-    def remove_listener(self, listener: Listener) -> None:
-        """Remove a listener"""
-
-    @abstractmethod
-    async def start_discovery(self) -> None:
-        """Async version to start discovery.
-        Will return once discovery is started, but before any controllers
-        are found.
-        """
-
-    @abstractmethod
-    async def close(self) -> None:
-        """Stop discovery and close all connections"""
-
-    @property
-    @abstractmethod
-    def is_closed(self) -> bool:
-        """Return true if closed."""
-        raise NotImplementedError
-
-    @abstractmethod
-    async def fetch_controller(
-        self, uid: str, timeout: float | None = None
-    ) -> Controller | None:
-        """Return the controller with *uid*, optionally waiting up to *timeout* seconds.
-
-        With no timeout, returns the controller if already discovered, or ``None``.
-        With a timeout, triggers a rescan (subject to cool-down) and waits up to
-        *timeout* seconds for the controller to appear.  Returns ``None`` on expiry.
-        If the controller is already known, it is returned immediately.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    async def fetch_controllers(
-        self, timeout: float | None = None
-    ) -> Dict[str, Controller]:
-        """Return all known controllers, optionally waiting for discovery to settle.
-
-        With no timeout, returns a snapshot of the current controllers dict.
-        With a timeout, triggers a rescan (subject to cool-down), waits the full
-        *timeout* duration for responses, then returns the snapshot.
-        """
-        raise NotImplementedError
-
-
-class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
+class DiscoveryService(DatagramProtocol, Listener):
     """Discovery protocol class. Not for external use."""
 
     def __init__(self, session: ClientSession | None = None) -> None:
@@ -156,7 +93,7 @@ class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
             RuntimeError: If attempted to start the protocol when it is
                           already running.
         """
-        self._controllers: Dict[str, Controller] = {}
+        self._controllers: dict[str, Controller] = {}
         self._disconnected: set[str] = set()
         self._listeners: list[Listener] = []
         self._close_task: Task | None = None
@@ -173,7 +110,7 @@ class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
         self._tasks: list[Task] = []
 
     # Async context manager interface
-    async def __aenter__(self) -> DiscoveryService:
+    async def __aenter__(self) -> "DiscoveryService":
         await self.start_discovery()
         return self
 
@@ -258,6 +195,7 @@ class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
 
     # Non-context versions of starting.
     async def start_discovery(self) -> None:
+        """Start discovery protocol. Creates UDP socket and begins scanning for devices."""
         if self._own_session:
             self.session = ClientSession()
         await asyncio.get_running_loop().create_datagram_endpoint(
@@ -330,7 +268,7 @@ class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
         ready = asyncio.Event()
 
         class _WaitForUidListener(Listener):
-            def controller_discovered(self_, ctrl: Controller) -> None:  # noqa: N805
+            def controller_discovered(self, ctrl: Controller) -> None:  # noqa: N805
                 if ctrl.device_uid == uid:
                     ready.set()
 
@@ -354,7 +292,7 @@ class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
 
     async def fetch_controllers(
         self, timeout: float | None = None
-    ) -> Dict[str, Controller]:
+    ) -> dict[str, Controller]:
         """Return all known controllers, optionally waiting for discovery to settle."""
         if timeout is None:
             return dict(self._controllers)
@@ -390,6 +328,7 @@ class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
 
     @property
     def is_closed(self) -> bool:
+        """Check if the discovery service is closed."""
         if self._transport:
             return self._transport.is_closing()
         return self._close_task is not None
@@ -496,7 +435,7 @@ def discovery(
     context manager so can be used with 'async with' statement.
     Alternately call start_discovery or start_discovery_async to commence
     the discovery process."""
-    service = _DiscoveryServiceImpl(session=session)
+    service = DiscoveryService(session=session)
     for listener in listeners:
         service.add_listener(listener)
     return service

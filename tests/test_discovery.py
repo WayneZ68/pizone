@@ -27,7 +27,7 @@ async def test_rescan(send):
         assert not service.is_closed
         assert send.call_count == 1
 
-        await service.rescan()
+        await service._rescan()
         await sleep(0)
         assert send.call_count == 2
 
@@ -53,7 +53,7 @@ async def test_fail_on_connect(caplog):
 
     assert len(caplog.messages) == 1
     assert caplog.messages[0][:41] == "Can't connect to discovered server at IP "
-    assert not service.controllers
+    assert not service._controllers
 
 
 async def test_connection_lost(service, caplog):
@@ -67,10 +67,10 @@ async def test_connection_lost(service, caplog):
 
 
 async def test_discovery(service):
-    assert len(service.controllers) == 1
-    assert "000000001" in service.controllers
+    assert len(service._controllers) == 1
+    assert "000000001" in service._controllers
 
-    controller = service.controllers["000000001"]  # type: Controller
+    controller = service._controllers["000000001"]  # type: Controller
     assert controller.device_uid == "000000001"
     assert controller.device_ip == "8.8.8.8"
     assert controller.mode == Controller.Mode.HEAT
@@ -83,10 +83,10 @@ async def test_discovery(service):
 async def test_legacy_discovery(legacy_service):
     service = legacy_service
 
-    assert len(service.controllers) == 1
-    assert "000000001" in service.controllers
+    assert len(service._controllers) == 1
+    assert "000000001" in service._controllers
 
-    controller = service.controllers["000000001"]  # type: Controller
+    controller = service._controllers["000000001"]  # type: Controller
     assert controller.device_uid == "000000001"
     assert controller.device_ip == "8.8.8.8"
     assert controller.mode == Controller.Mode.HEAT
@@ -97,7 +97,7 @@ async def test_legacy_discovery(legacy_service):
 
 
 async def test_ip_addr_change(service, caplog):
-    controller = service.controllers["000000001"]  # type: Controller
+    controller = service._controllers["000000001"]  # type: Controller
     assert controller.device_uid == "000000001"
     assert controller.device_ip == "8.8.8.8"
 
@@ -110,7 +110,7 @@ async def test_ip_addr_change(service, caplog):
 
 
 async def test_reconnect(service, caplog):
-    controller = service.controllers["000000001"]  # type: Controller
+    controller = service._controllers["000000001"]  # type: Controller
     assert controller.device_uid == "000000001"
     assert controller.mode == Controller.Mode.HEAT
 
@@ -134,7 +134,7 @@ async def test_reconnect(service, caplog):
 
 
 async def test_reconnect_listener(service):
-    controller = service.controllers["000000001"]  # type: Controller
+    controller = service._controllers["000000001"]  # type: Controller
 
     calls = []
 
@@ -175,7 +175,7 @@ async def test_reconnect_listener(service):
         b"ASPort_12107,Mac_000000002,IP_8.8.8.4,iZone,iLight,iDrate", ("8.8.8.8", 12107)
     )
     await sleep(0.1)
-    controller2 = service.controllers["000000002"]  # type: Controller
+    controller2 = service._controllers["000000002"]  # type: Controller
 
     assert len(calls) == 4
     assert calls[-1] == ("discovered", controller2)

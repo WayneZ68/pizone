@@ -10,6 +10,7 @@ from asyncio import (
     DatagramTransport,
     Task,
 )
+from contextlib import suppress
 from typing import Any, Dict
 
 import netifaces  # type: ignore
@@ -26,9 +27,9 @@ CHANGED_SYSTEM = b"iZoneChanged_System"
 CHANGED_ZONES = b"iZoneChanged_Zones"
 CHANGED_SCHEDULES = b"iZoneChanged_Schedules"
 
-DISCOVERY_TIMEOUT = 2.0
 DISCOVERY_SLEEP = 5.0 * 60.0
 DISCOVERY_RESCAN = 20.0
+RESCAN_COOLDOWN = 5.0
 
 _LOG = logging.getLogger("pizone.discovery")
 
@@ -110,15 +111,6 @@ class DiscoveryService(ABC):
         """
 
     @abstractmethod
-    async def rescan(self) -> None:
-        """Trigger rescan for new controllers / update IP addresses of
-        existing controllers.
-
-        Returns immediately, listener will be called with any new
-        controllers or if reconnected.
-        """
-
-    @abstractmethod
     async def close(self) -> None:
         """Stop discovery and close all connections"""
 
@@ -128,10 +120,29 @@ class DiscoveryService(ABC):
         """Return true if closed."""
         raise NotImplementedError
 
-    @property
     @abstractmethod
-    def controllers(self) -> Dict[str, Controller]:
-        """Dictionary of all the currently discovered controllers."""
+    async def fetch_controller(
+        self, uid: str, timeout: float | None = None
+    ) -> Controller | None:
+        """Return the controller with *uid*, optionally waiting up to *timeout* seconds.
+
+        With no timeout, returns the controller if already discovered, or ``None``.
+        With a timeout, triggers a rescan (subject to cool-down) and waits up to
+        *timeout* seconds for the controller to appear.  Returns ``None`` on expiry.
+        If the controller is already known, it is returned immediately.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def fetch_controllers(
+        self, timeout: float | None = None
+    ) -> Dict[str, Controller]:
+        """Return all known controllers, optionally waiting for discovery to settle.
+
+        With no timeout, returns a snapshot of the current controllers dict.
+        With a timeout, triggers a rescan (subject to cool-down), waits the full
+        *timeout* duration for responses, then returns the snapshot.
+        """
         raise NotImplementedError
 
 
@@ -157,6 +168,7 @@ class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
         self._transport: DatagramTransport | None = None
 
         self._scan_condition = Condition()
+        self._last_rescan_time: float = 0.0
 
         self._tasks: list[Task] = []
 
@@ -244,11 +256,6 @@ class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
             with LogExceptions("power_update"):
                 listener.power_update(ctrl)
 
-    @property
-    def controllers(self) -> Dict[str, Controller]:
-        """Dictionary of all the currently discovered controllers"""
-        return self._controllers
-
     # Non-context versions of starting.
     async def start_discovery(self) -> None:
         if self._own_session:
@@ -300,15 +307,61 @@ class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
             if self._close_task:
                 return
 
-    async def rescan(self) -> None:
-        if self.is_closed:
-            raise ConnectionError("Already closed")
-        _LOG.debug("Manual rescan of controllers triggered.")
-        await self._rescan()
-
     async def _rescan(self) -> None:
         async with self._scan_condition:
             self._scan_condition.notify()
+
+    async def _maybe_rescan(self) -> None:
+        """Trigger a rescan only if outside the cool-down window."""
+        now = asyncio.get_running_loop().time()
+        if now - self._last_rescan_time >= RESCAN_COOLDOWN:
+            self._last_rescan_time = now
+            await self._rescan()
+
+    async def fetch_controller(
+        self, uid: str, timeout: float | None = None
+    ) -> Controller | None:
+        """Return the controller with *uid*, optionally waiting up to *timeout* seconds."""
+        if uid in self._controllers:
+            return self._controllers[uid]
+        if timeout is None:
+            return None
+
+        ready = asyncio.Event()
+
+        class _WaitForUidListener(Listener):
+            def controller_discovered(self_, ctrl: Controller) -> None:  # noqa: N805
+                if ctrl.device_uid == uid:
+                    ready.set()
+
+        listener = _WaitForUidListener()
+        self.add_listener(listener)
+        try:
+            # Re-check after registering the listener (add_listener uses call_soon,
+            # so no race possible in the single-threaded event loop).
+            if uid in self._controllers:
+                return self._controllers[uid]
+
+            await self._maybe_rescan()
+
+            with suppress(TimeoutError):
+                async with asyncio.timeout(timeout):
+                    await ready.wait()
+        finally:
+            self.remove_listener(listener)
+
+        return self._controllers.get(uid)
+
+    async def fetch_controllers(
+        self, timeout: float | None = None
+    ) -> Dict[str, Controller]:
+        """Return all known controllers, optionally waiting for discovery to settle."""
+        if timeout is None:
+            return dict(self._controllers)
+
+        await self._maybe_rescan()
+        await asyncio.sleep(timeout)
+        return dict(self._controllers)
 
     # Closing the connection
     async def close(self) -> None:

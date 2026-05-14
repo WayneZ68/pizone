@@ -13,9 +13,17 @@ from pizone.discovery import CHANGED_SYSTEM, CHANGED_ZONES, DiscoveryService
 
 class MockController(Controller):
     def __init__(
-        self, discovery, device_uid: str, device_ip: str, is_v2: bool, is_ipower: bool
+        self,
+        service,
+        event_coordinator,
+        device_uid: str,
+        device_ip: str,
+        is_v2: bool,
+        is_ipower: bool,
     ) -> None:
-        super().__init__(discovery, device_uid, device_ip, is_v2, is_ipower)
+        super().__init__(
+            service, event_coordinator, device_uid, device_ip, is_v2, is_ipower
+        )
         from .resources import SYSTEMS
 
         self.resources = deepcopy(SYSTEMS[device_uid])  # type: dict[str, Any]
@@ -34,7 +42,7 @@ class MockController(Controller):
         result = self.resources.get(resource)
         if result:
             return deepcopy(result)
-        raise ConnectionError("Mock resource '{}' not available".format(resource))
+        raise ConnectionError(f"Mock resource '{resource}' not available")
 
     async def _send_command_async(self, command: str, data: Any):
         """Mock out the network IO for _send_command."""
@@ -47,7 +55,7 @@ class MockController(Controller):
 
     async def change_zone_state(self, zone: int, state: str, value: Any) -> None:
         idx = zone % 4
-        segment = "Zones{}_{}".format(zone - idx, zone - idx + 4)
+        segment = f"Zones{zone - idx}_{zone - idx + 4}"
         self.resources[segment][idx][state] = value
         await self.discovery._process_datagram(CHANGED_ZONES, ("8.8.8.8", 12107))
 
@@ -62,6 +70,7 @@ class MockDiscoveryService(DiscoveryService):
     def _create_controller(self, device_uid, device_ip, is_v2, is_ipower):
         return MockController(
             self,
+            self._event_coordinator,
             device_uid=device_uid,
             device_ip=device_ip,
             is_v2=is_v2,

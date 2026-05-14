@@ -18,7 +18,7 @@ from aiohttp import ClientSession
 from .controller import Controller
 from .zone import Zone
 
-DISCOVERY_MSG = b"IASD"
+DISCOVERY_MSG = b"IASD"  # cspell:disable-line
 DISCOVERY_PORT = 12107
 
 UPDATE_PORT = 7005
@@ -83,8 +83,8 @@ class Listener:
         """Called when the power monitor updates."""
 
 
-class DiscoveryService(DatagramProtocol, Listener):
-    """Discovery protocol class. Not for external use."""
+class DiscoveryService:
+    """Discovery service: manages controller registry, listener fanout, and UDP scanning."""
 
     def __init__(self, session: ClientSession | None = None) -> None:
         """Start the discovery protocol using the supplied loop.
@@ -99,7 +99,7 @@ class DiscoveryService(DatagramProtocol, Listener):
         self._close_task: Task | None = None
 
         _LOG.info("Starting discovery protocol")
-        self.session = session
+        self._session = session
         self._own_session = session is None
 
         self._transport: DatagramTransport | None = None
@@ -108,6 +108,61 @@ class DiscoveryService(DatagramProtocol, Listener):
         self._last_rescan_time: float = 0.0
 
         self._tasks: list[Task] = []
+
+        _srv = self
+
+        class _EventCoordinator(Listener):
+            """Fan-out adapter: dispatches controller/zone events to all registered listeners."""
+
+            # pylint: disable=protected-access
+
+            def controller_discovered(self, ctrl: Controller) -> None:
+                _LOG.info(
+                    "New controller found: id=%s ip=%s", ctrl.device_uid, ctrl.device_ip
+                )
+                for listener in _srv._listeners:
+                    with LogExceptions("controller_discovered"):
+                        listener.controller_discovered(ctrl)
+
+            def controller_disconnected(self, ctrl: Controller, ex: Exception) -> None:
+                _LOG.warning(
+                    "Connection to controller lost: id=%s ip=%s",
+                    ctrl.device_uid,
+                    ctrl.device_ip,
+                )
+                _srv._disconnected.add(ctrl.device_uid)
+                _srv.create_task(_srv._rescan())
+                for listener in _srv._listeners:
+                    with LogExceptions("controller_disconnected"):
+                        listener.controller_disconnected(ctrl, ex)
+
+            def controller_reconnected(self, ctrl: Controller) -> None:
+                _LOG.warning(
+                    "Controller reconnected: id=%s ip=%s",
+                    ctrl.device_uid,
+                    ctrl.device_ip,
+                )
+                _srv._disconnected.remove(ctrl.device_uid)
+                for listener in _srv._listeners:
+                    with LogExceptions("controller_reconnected"):
+                        listener.controller_reconnected(ctrl)
+
+            def controller_update(self, ctrl: Controller) -> None:
+                for listener in _srv._listeners:
+                    with LogExceptions("controller_update"):
+                        listener.controller_update(ctrl)
+
+            def zone_update(self, ctrl: Controller, zone: Zone) -> None:
+                for listener in _srv._listeners:
+                    with LogExceptions("zone_update"):
+                        listener.zone_update(ctrl, zone)
+
+            def power_update(self, ctrl: Controller) -> None:
+                for listener in _srv._listeners:
+                    with LogExceptions("power_update"):
+                        listener.power_update(ctrl)
+
+        self._event_coordinator: Listener = _EventCoordinator()
 
     # Async context manager interface
     async def __aenter__(self) -> "DiscoveryService":
@@ -151,58 +206,36 @@ class DiscoveryService(DatagramProtocol, Listener):
         """Remove a listener"""
         self._listeners.remove(listener)
 
-    def controller_discovered(self, ctrl: Controller) -> None:
-        _LOG.info("New controller found: id=%s ip=%s", ctrl.device_uid, ctrl.device_ip)
-        for listener in self._listeners:
-            with LogExceptions("controller_discovered"):
-                listener.controller_discovered(ctrl)
-
-    def controller_disconnected(self, ctrl: Controller, ex: Exception) -> None:
-        _LOG.warning(
-            "Connection to controller lost: id=%s ip=%s",
-            ctrl.device_uid,
-            ctrl.device_ip,
-        )
-        self._disconnected.add(ctrl.device_uid)
-        self.create_task(self._rescan())
-        for listener in self._listeners:
-            with LogExceptions("controller_disconnected"):
-                listener.controller_disconnected(ctrl, ex)
-
-    def controller_reconnected(self, ctrl: Controller) -> None:
-        _LOG.warning(
-            "Controller reconnected: id=%s ip=%s", ctrl.device_uid, ctrl.device_ip
-        )
-        self._disconnected.remove(ctrl.device_uid)
-        for listener in self._listeners:
-            with LogExceptions("controller_reconnected"):
-                listener.controller_reconnected(ctrl)
-
-    def controller_update(self, ctrl: Controller) -> None:
-        for listener in self._listeners:
-            with LogExceptions("controller_update"):
-                listener.controller_update(ctrl)
-
-    def zone_update(self, ctrl: Controller, zone: Zone) -> None:
-        for listener in self._listeners:
-            with LogExceptions("zone_update"):
-                listener.zone_update(ctrl, zone)
-
-    def power_update(self, ctrl: Controller) -> None:
-        for listener in self._listeners:
-            with LogExceptions("power_update"):
-                listener.power_update(ctrl)
-
     # Non-context versions of starting.
     async def start_discovery(self) -> None:
         """Start discovery protocol. Creates UDP socket and begins scanning for devices."""
         if self._own_session:
-            self.session = ClientSession()
+            self._session = ClientSession()
+
+        _svc = self
+
+        class _UDPTransport(DatagramProtocol):
+            # pylint: disable=protected-access
+            def connection_made(self, transport: DatagramTransport) -> None:  # type: ignore
+                _svc._on_connection_made(transport)
+
+            def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+                _svc._on_datagram_received(data, addr)
+
+            def connection_lost(self, exc: Exception | None) -> None:
+                _svc._on_connection_lost(exc)
+
+            def error_received(self, exc: Exception) -> None:
+                _svc._on_error_received(exc)
+
         await asyncio.get_running_loop().create_datagram_endpoint(
-            lambda: self, local_addr=("0.0.0.0", UPDATE_PORT), allow_broadcast=True
+            _UDPTransport,
+            local_addr=("0.0.0.0", UPDATE_PORT),
+            allow_broadcast=True,
         )
 
-    def connection_made(self, transport: DatagramTransport) -> None:  # type: ignore  # noqa: E501
+    # Private callbacks invoked by _UDPTransport.
+    def _on_connection_made(self, transport: DatagramTransport) -> None:
         if self._close_task:
             transport.close()
             return
@@ -315,12 +348,12 @@ class DiscoveryService(DatagramProtocol, Listener):
         for i in self._tasks:
             i.cancel()
 
-        if self._own_session and self.session:
-            await self.session.close()
+        if self._own_session and self._session:
+            await self._session.close()
 
         await asyncio.wait(self._tasks)
 
-    def connection_lost(self, exc: Exception | None) -> None:
+    def _on_connection_lost(self, exc: Exception | None) -> None:
         _LOG.debug("Connection Lost")
         if not self._close_task:
             _LOG.error("Connection Lost unexpectedly: %s", repr(exc))
@@ -333,7 +366,12 @@ class DiscoveryService(DatagramProtocol, Listener):
             return self._transport.is_closing()
         return self._close_task is not None
 
-    def error_received(self, exc: Exception) -> None:
+    @property
+    def session(self) -> Any:
+        """Return the aiohttp session used for HTTP requests."""
+        return self._session
+
+    def _on_error_received(self, _: Exception) -> None:
         _LOG.warning("Error passed and ignored to error_received", exc_info=True)
 
     def _find_by_addr(self, addr: tuple[str, int]) -> Controller | None:
@@ -350,7 +388,7 @@ class DiscoveryService(DatagramProtocol, Listener):
                 "Unable to complete %s due to connection error", coro, exc_info=True
             )
 
-    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+    def _on_datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         _LOG.debug("Datagram Received %s", data)
         if self._close_task:
             return
@@ -409,7 +447,7 @@ class DiscoveryService(DatagramProtocol, Listener):
                     return
 
                 self._controllers[device_uid] = controller
-                self.controller_discovered(controller)
+                self._event_coordinator.controller_discovered(controller)
 
             self.create_task(initialize_controller())
         else:
@@ -421,6 +459,7 @@ class DiscoveryService(DatagramProtocol, Listener):
     ) -> Controller:
         return Controller(
             self,
+            self._event_coordinator,
             device_uid=device_uid,
             device_ip=device_ip,
             is_v2=is_v2,

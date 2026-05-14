@@ -1,17 +1,22 @@
 """Controller module"""
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
 from asyncio import Condition, Lock
 from enum import Enum
 from json.decoder import JSONDecodeError
-from typing import Any, Dict, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, Union, cast
 
 import aiohttp
 
 from .power import Power
 from .zone import Zone
+
+if TYPE_CHECKING:
+    from .discovery import DiscoveryService, Listener
 
 _LOG = logging.getLogger("pizone.controller")
 
@@ -61,7 +66,8 @@ class Controller:
 
     def __init__(
         self,
-        discovery: Any,
+        discovery_service: DiscoveryService,
+        event_coordinator: Listener,
         device_uid: str,
         device_ip: str,
         is_v2: bool,
@@ -87,7 +93,8 @@ class Controller:
                 device discovered at the given IP address or UId
         """
         self._ip = device_ip
-        self._discovery = discovery
+        self._discovery_service = discovery_service
+        self._event_coordinator = event_coordinator
         self._device_uid = device_uid
         self._is_v2 = is_v2
         self._is_ipower = is_ipower
@@ -97,7 +104,7 @@ class Controller:
         self._system_settings: Controller.ControllerData = {}
         self._power: Power | None = None
 
-        self._initialised: bool = False
+        self._initialized: bool = False
         self._fail_exception: Exception | None = None
 
         self._sending_lock = Lock()
@@ -105,7 +112,7 @@ class Controller:
 
     async def _initialize(self) -> None:
         """Initialize the controller, does not complete until the system is
-        initialised."""
+        initialized."""
         await self._refresh_system(notify=False)
 
         self.fan_modes = Controller._VALID_FAN_MODES[
@@ -124,8 +131,8 @@ class Controller:
         else:
             self._power = None
 
-        self._initialised = True
-        self._discovery.create_task(self._poll_loop())
+        self._initialized = True
+        self._discovery_service.create_task(self._poll_loop())
 
     async def _poll_loop(self) -> None:
         while True:
@@ -138,7 +145,7 @@ class Controller:
             except asyncio.TimeoutError:
                 pass
 
-            if self._discovery.is_closed:
+            if self._discovery_service.is_closed:
                 return
 
             # pylint: disable=broad-except
@@ -146,7 +153,7 @@ class Controller:
                 _LOG.debug("Polling unit %s.", self._device_uid)
                 await self._refresh_all()
             except ConnectionError:
-                _LOG.debug("Poll failed due to exeption.", exc_info=True)
+                _LOG.debug("Poll failed due to exception.", exc_info=True)
             except Exception:
                 _LOG.error("Unexpected exception", exc_info=True)
 
@@ -183,7 +190,7 @@ class Controller:
     @property
     def discovery(self) -> Any:
         """The discovery service"""
-        return self._discovery
+        return self._discovery_service
 
     @property
     def is_on(self) -> bool:
@@ -318,7 +325,7 @@ class Controller:
 
     @property
     def temp_max(self) -> float:
-        """The value for the eco lock maxium, or 30 if eco lock not set"""
+        """The value for the eco lock maximum, or 30 if eco lock not set"""
         return float(self._get_system_state("EcoMax")) if self.eco_lock else 30.0
 
     @property
@@ -374,13 +381,13 @@ class Controller:
         """Refresh the system settings."""
         values: Controller.ControllerData = await self._get_resource("SystemSettings")
         if self._device_uid != values["AirStreamDeviceUId"]:
-            _LOG.error("_refresh_system called with unmatching device ID")
+            _LOG.error("_refresh_system called with non-matching device ID")
             return
 
         self._system_settings = values
 
         if notify:
-            self._discovery.controller_update(self)
+            self._event_coordinator.controller_update(self)
 
     async def _refresh_power(self, notify: bool = True) -> None:
         if self._power is None or not self._power.enabled:
@@ -389,7 +396,7 @@ class Controller:
         updated = await self._power.refresh()
 
         if updated and notify:
-            self._discovery.power_update(self)
+            self._event_coordinator.power_update(self)
 
     async def _refresh_zones(self, notify: bool = True) -> None:
         """Refresh the Zone information."""
@@ -412,7 +419,7 @@ class Controller:
         self._ip = address
         # Signal to the retry connection loop to have another go.
         if self._fail_exception:
-            self._discovery.create_task(self._retry_connection())
+            self._discovery_service.create_task(self._retry_connection())
 
     def _get_system_state(self, state: str) -> Any:
         self._ensure_connected()
@@ -431,7 +438,7 @@ class Controller:
 
         # Update state and trigger rescan
         self._system_settings[state] = value
-        self._discovery.controller_update(self)
+        self._event_coordinator.controller_update(self)
         await self.refresh()
 
     def _ensure_connected(self) -> None:
@@ -445,9 +452,9 @@ class Controller:
             self._fail_exception = ex
             return
         self._fail_exception = ex
-        if not self._initialised:
+        if not self._initialized:
             return
-        self._discovery.controller_disconnected(self, ex)
+        self._event_coordinator.controller_disconnected(self, ex)
 
     async def _retry_connection(self) -> None:
         _LOG.info(
@@ -461,11 +468,11 @@ class Controller:
 
             self._fail_exception = None
 
-            self._discovery.controller_update(self)
+            self._event_coordinator.controller_update(self)
             for zone in self.zones:
-                self._discovery.zone_update(self, zone)
-            self._discovery.power_update(self)
-            self._discovery.controller_reconnected(self)
+                self._event_coordinator.zone_update(self, zone)
+            self._event_coordinator.power_update(self)
+            self._event_coordinator.controller_reconnected(self)
         except ConnectionError:
             # Expected, just carry on.
             _LOG.warning(
@@ -476,7 +483,7 @@ class Controller:
 
     async def _get_resource(self, resource: str) -> Any:
         try:
-            session = self._discovery.session
+            session = self._discovery_service.session
             async with (
                 self._sending_lock,
                 session.get(
@@ -500,7 +507,7 @@ class Controller:
 
     async def _send_command_async(self, command: str, data: Any) -> str:
         # For some reason aiohttp fragments post requests, which causes
-        # the server to fail disgracefully. Implimented rough and dirty
+        # the server to fail disgracefully. Implemented rough and dirty
         # HTTP POST client.
         loop = asyncio.get_running_loop()
         on_complete = loop.create_future()

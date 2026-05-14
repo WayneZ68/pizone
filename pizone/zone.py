@@ -168,7 +168,7 @@ class Zone:
 
     def _fire_listeners(self) -> None:
         # pylint: disable=protected-access
-        self._controller._discovery.zone_update(self._controller, self)
+        self._controller._event_coordinator.zone_update(self._controller, self)
 
     def _get_zone_state(self, state: str) -> Any:
         self._controller._ensure_connected()  # pylint: disable=protected-access  # noqa

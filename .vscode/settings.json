@@ -12,6 +12,15 @@
     "python.globalModuleInstallation": false,
     "python.formatting.provider": "black",
     "cSpell.words": [
-        "inetaddrs"
+        "inetaddrs",
+        "inetaddr",
+        "ifaddresses",
+        "rescan",
+        "pizone",
+        "ipower",
+        "COOLDOWN",
+        "coro",
+        "datagram",
+        "fanout"
     ]
 }

@@ -64,7 +64,7 @@ async def test_fail_on_connect(caplog):
 
 @pytest.mark.asyncio
 async def test_connection_lost(service, caplog):
-    service.connection_lost(IOError("Nonspecific"))
+    service._on_connection_lost(IOError("Nonspecific"))
     await sleep(0)
 
     assert len(caplog.messages) == 1

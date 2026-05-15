@@ -22,7 +22,12 @@ class MockController(Controller):
         is_ipower: bool,
     ) -> None:
         super().__init__(
-            service, event_coordinator, device_uid, device_ip, is_v2, is_ipower
+            service,
+            event_coordinator,
+            device_uid=device_uid,
+            device_ip=device_ip,
+            is_v2=is_v2,
+            is_ipower=is_ipower,
         )
         from .resources import SYSTEMS
 

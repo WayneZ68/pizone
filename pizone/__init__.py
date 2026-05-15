@@ -8,15 +8,15 @@ from .discovery import DiscoveryService, Listener, discovery
 from .power import BatteryLevel, Power, PowerChannel, PowerDevice, PowerGroup
 from .zone import Zone
 
-__ALL__ = [
-    Controller,
-    Zone,
-    DiscoveryService,
-    Listener,
-    discovery,
-    Power,
-    PowerGroup,
-    PowerDevice,
-    PowerChannel,
-    BatteryLevel,
+__all__ = [
+    "Controller",
+    "Zone",
+    "DiscoveryService",
+    "Listener",
+    "discovery",
+    "Power",
+    "PowerGroup",
+    "PowerDevice",
+    "PowerChannel",
+    "BatteryLevel",
 ]

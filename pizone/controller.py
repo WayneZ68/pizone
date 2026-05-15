@@ -68,6 +68,7 @@ class Controller:
         self,
         discovery_service: DiscoveryService,
         event_coordinator: Listener,
+        *,
         device_uid: str,
         device_ip: str,
         is_v2: bool,
